@@ -16,27 +16,35 @@ class Person:
         self.retirement_age=retirement_age
         self.ss_age=ss_age
 
+class Trust:
+    def __init__(self, name,start_date):
+        self.name = name
+        self.start_date=start_date
+        self.ret_accnt_end_date=datetime.date(self.start_date.year + 10,12,31)
+        
+
 class Account:
-    def __init__(self,name,owner,start_balance,annual_contribution,tax_treatment):
+    def __init__(self,name,owner,start_balance,annual_contribution,tax_treatment,is_retirement):
         self.name = name
         self.owner=owner
         self.start_balance=start_balance
         self.annual_contribution=annual_contribution
         self.tax_treatment=tax_treatment
+        self.is_retirement=is_retirement
 
 Madison=Person("Madison", "Stone", datetime.date(1986,3,9) , 61 ,62)
 Greg=Person("Greg", "Stone", datetime.date(1987,2,17), 62 , 62)
-Trust=Person("David S Huy Trust",datetime.date(2025,6,10),None,None,None)
+DSH_Trust=Trust("David S Huy Trust",datetime.date(2025,6,10))
 
-mads_410k=Account("Madison 401k",Madison,56000,12000,"tax deferred")
-greg_roth=Account("Greg Roth",Greg,55000,7000,"after tax")
-greg_ira=Account("Greg IRA",Greg,172000,0,"tax deferred")
+mads_410k=Account("Madison 401k",Madison,56000,12000,"tax deferred",True)
+greg_roth=Account("Greg Roth",Greg,55000,7000,"after tax",True)
+greg_ira=Account("Greg IRA",Greg,172000,0,"tax deferred",True)
 
-trust_brokerage=Account("Trust Brokerage", Trust, 360000,0,"taxable")
-trust_IRA=Account("Trust IRA", Trust, 55000,0,"tax deferred")
-trust_Roth=Account("Trust Roth", Trust, 55000,0,"after-tax")
+trust_brokerage=Account("Trust Brokerage", DSH_Trust, 360000,0,"taxable",False)
+trust_IRA=Account("Trust IRA", DSH_Trust, 55000,0,"tax deferred",True)
+trust_Roth=Account("Trust Roth", DSH_Trust, 55000,0,"after-tax",True)
 
-accounts=mads_410k,greg_roth,greg_ira
+accounts=mads_410k,greg_roth,greg_ira,trust_brokerage,trust_IRA,trust_Roth
 
 
 
@@ -50,13 +58,58 @@ returns = np.random.lognormal(
     size=(num_years, num_runs)
 )
 
-def simulate_account(starting_value, returns, annual_contribution=0):
-    num_years, num_runs = returns.shape
-    values = np.zeros((num_years, num_runs))
-    balance = np.full(num_runs, float(starting_value))
-    for year in range(num_years):
-        balance = balance * returns[year] + annual_contribution
-        values[year] = balance
+RMD_Factor={
+    75:24.6,
+    76:23.7,
+    77:22.9,
+    78:22.0,
+    79:21.1,
+    80:20.2,
+    81:19.4,
+    82:18.5,
+    83:17.7,
+    84:16.8,
+    85:16.0,
+    86:15.2,
+    87:14.4,
+    88:13.7,
+    89:12.9,
+    90:12.2,
+    91:11.5,
+    92:10.8,
+    93:10.1,
+    94:9.5,
+    95:8.9
+}
+
+def simulate_account(account, returns,RMD_Factor,num_simulations):
+    if type(account.owner)==Trust and account.is_retirement:
+        years=account.owner.ret_accnt_end_date.year-account.owner.start_date.year
+    else:
+        years, num_simulations = returns.shape
+    values = np.zeros((years, num_simulations))
+    RMD_income = np.zeros((years, num_simulations))
+    balance = np.full(num_simulations, float(account.start_balance))
+    
+    if account.tax_treatment=="tax deferrred":
+        for year in range(years):
+            age=(year + (today()-account.owner.dob).year)
+            if age <= account.owner.retirement_age:
+                balance = balance * returns[year] + account.annual_contribution
+                values[year] = balance
+                RMD_income[year]=0
+            elif age >= 75:
+                RMD_income[year]=balance/RMD_Factor[age]
+                balance = balance * returns[year] - balance/RMD_Factor[age]
+                values[year] = balance
+            else:
+                balance = balance * returns[year]
+                values[year] = balance
+                RMD_income[year]=balance/RMD_Factor[age]
+    else:
+        for year in range(years):
+            balance = balance * returns[year] + account.annual_contribution
+            values[year] = balance
     return values
 
 def get_percentile(account_values, percentile):
@@ -123,6 +176,6 @@ def plot_percentiles(account_values, num_years, start_year=2026, selected_percen
 
 account_values = 0
 for acct in accounts:
-    account_values += simulate_account(acct.start_balance, returns, acct.annual_contribution)
+    account_values += simulate_account(acct,returns, RMD_Factor,num_runs)
 
 plot_percentiles(account_values, num_years, start_year=2026, selected_percentile=33)
