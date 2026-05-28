@@ -31,6 +31,46 @@ class Account:
         self.annual_contribution=annual_contribution
         self.tax_treatment=tax_treatment
         self.is_retirement=is_retirement
+        self.balances = None  # shape: (years, 1 + num_simulations); col 0 = calendar year
+
+    def simulate(self, returns, RMD_Factor, start_year=None):
+        if start_year is None:
+            start_year = datetime.date.today().year
+        num_years, num_simulations = returns.shape
+
+        if isinstance(self.owner, Trust) and self.is_retirement:
+            years = self.owner.ret_accnt_end_date.year - self.owner.start_date.year
+        else:
+            years = num_years
+
+        values = np.zeros((years, num_simulations))
+        RMD_income = np.zeros((years, num_simulations))
+        balance = np.full(num_simulations, float(self.start_balance))
+        today = datetime.date.today()
+
+        if self.tax_treatment == "tax deferred":
+            for year in range(years):
+                age = year + (today - self.owner.dob).days // 365
+                if age <= self.owner.retirement_age:
+                    balance = balance * returns[year] + self.annual_contribution
+                    values[year] = balance
+                    RMD_income[year] = 0
+                elif age >= 75:
+                    rmd_key = min(age, 95)
+                    RMD_income[year] = balance / RMD_Factor[rmd_key]
+                    balance = balance * returns[year] - balance / RMD_Factor[rmd_key]
+                    values[year] = balance
+                else:
+                    balance = balance * returns[year]
+                    values[year] = balance
+                    RMD_income[year] = 0
+        else:
+            for year in range(years):
+                balance = balance * returns[year] + self.annual_contribution
+                values[year] = balance
+
+        year_col = np.arange(start_year, start_year + years, dtype=float).reshape(-1, 1)
+        self.balances = np.hstack([year_col, values])
 
 Madison=Person("Madison", "Stone", datetime.date(1986,3,9) , 61 ,62)
 Greg=Person("Greg", "Stone", datetime.date(1987,2,17), 62 , 62)
@@ -82,35 +122,6 @@ RMD_Factor={
     95:8.9
 }
 
-def simulate_account(account, returns,RMD_Factor,num_simulations):
-    if type(account.owner)==Trust and account.is_retirement:
-        years=account.owner.ret_accnt_end_date.year-account.owner.start_date.year
-    else:
-        years, num_simulations = returns.shape
-    values = np.zeros((years, num_simulations))
-    RMD_income = np.zeros((years, num_simulations))
-    balance = np.full(num_simulations, float(account.start_balance))
-    
-    if account.tax_treatment=="tax deferrred":
-        for year in range(years):
-            age=(year + (today()-account.owner.dob).year)
-            if age <= account.owner.retirement_age:
-                balance = balance * returns[year] + account.annual_contribution
-                values[year] = balance
-                RMD_income[year]=0
-            elif age >= 75:
-                RMD_income[year]=balance/RMD_Factor[age]
-                balance = balance * returns[year] - balance/RMD_Factor[age]
-                values[year] = balance
-            else:
-                balance = balance * returns[year]
-                values[year] = balance
-                RMD_income[year]=balance/RMD_Factor[age]
-    else:
-        for year in range(years):
-            balance = balance * returns[year] + account.annual_contribution
-            values[year] = balance
-    return values
 
 def get_percentile(account_values, percentile):
     return np.percentile(account_values[-1], percentile)
@@ -176,6 +187,7 @@ def plot_percentiles(account_values, num_years, start_year=2026, selected_percen
 
 account_values = 0
 for acct in accounts:
-    account_values += simulate_account(acct,returns, RMD_Factor,num_runs)
+    acct.simulate(returns, RMD_Factor, start_year=2026)
+    account_values += acct.balances[:, 1:]  # col 0 is calendar year; exclude when summing
 
 plot_percentiles(account_values, num_years, start_year=2026, selected_percentile=33)
