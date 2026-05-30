@@ -7,25 +7,45 @@ num_runs = 10000
 num_years = 56
 mean_return = 0.06
 market_volatility = 0.17
+selected_percentile=33
 
 class Person:
-    def __init__(self, fname, lname, dob, retirement_age, ss_age, ss_pia,has_pension,pension_startdate,salary):
+    def __init__(self, fname, lname, dob, retirement_date, ss_age, ss_pia,has_pension,pension_startdate,salary):
         self.fname = fname
         self.lname = lname
         self.dob = dob
-        self.retirement_age = retirement_age
+        self.retirement_date = retirement_date
         self.ss_age = ss_age
         self.ss_pia = ss_pia
         self.has_pension=has_pension
         self.pension_startdate=pension_startdate
         self.salary=salary
+        
 
+    @property
+    def age(self):
+        today = datetime.date.today()
+        # Subtracts 1 if the current calendar day is before the birth calendar day
+        return today.year - self.dob.year - ((today.month, today.day) < (self.dob.month, self.dob.day))
+
+    @property
+    def ret_age(self):
+        return self.retirement_date.year - self.dob.year - ((self.retirement_date.month, self.retirement_date.day) < (self.dob.month, self.dob.day))
+   
     def calcPension(self):
-        serv_years = self.retirement_age - (self.pension_startdate.year - self.dob.year)
-        pensionable_income = max(self.salary, 159733)
-        return serv_years * 0.02 * pensionable_income
+        if self.has_pension:
+            self.ret_age
+            serv_mos=(self.retirement_date.year-self.pension_startdate.year)*12+(self.retirement_date.month-self.pension_startdate.month)
+            serv_years = serv_mos/12
+            pensionable_income = max(self.salary, 159733)
+            pension_factor={57:.015,58:.016,59:.017,60:.018,61:.019,62:.02,63:.021,64:.022,65:.023,64:.024,65:.025}
+            #print(ret_age)
+            #print(serv_years)
+            return serv_years * pension_factor[self.ret_age]* pensionable_income
+        else:
+            pass
 
-    def calcSS(self, start_year, num_years):
+    def calcSS(self):
         birth_year = self.dob.year
         if birth_year >= 1960:
             fra = 67
@@ -48,14 +68,8 @@ class Person:
             factor = 1.0
 
         annual_benefit = self.ss_pia * 12 * factor * 0.77
-        ss_start_year = self.dob.year + self.ss_age
-
-        income = np.zeros(num_years)
-        for i, year in enumerate(range(start_year, start_year + num_years)):
-            if year >= ss_start_year:
-                income[i] = annual_benefit
-        return income
-
+        
+        return annual_benefit
 
 class Trust:
     def __init__(self, name,start_date):
@@ -63,7 +77,6 @@ class Trust:
         self.start_date=start_date
         self.ret_accnt_end_date=datetime.date(self.start_date.year + 10,12,31)
         
-
 class Account:
     def __init__(self,name,owner,start_balance,annual_contribution,tax_treatment,is_retirement):
         self.name = name
@@ -72,8 +85,8 @@ class Account:
         self.annual_contribution=annual_contribution
         self.tax_treatment=tax_treatment
         self.is_retirement=is_retirement
-        self.balances = None    # shape: (years, 1 + num_simulations); col 0 = calendar year
-        self.rmd_income = None  # shape: (years, num_simulations)
+        self.balances = None    
+        self.rmd_income = None  
 
     def simulate(self, returns, RMD_Factor, start_year=None):
         if start_year is None:
@@ -109,14 +122,15 @@ class Account:
 
         elif self.tax_treatment == "tax deferred":
             for year in range(years):
-                age = year + (today - self.owner.dob).days // 365
-                if age <= self.owner.retirement_age:
+                cur_age = self.owner.age + year
+                if cur_age + year<= self.owner.ret_age:
                     balance = balance * returns[year] + self.annual_contribution
                     values[year] = balance
                     RMD_income[year] = 0
-                elif age >= 75:
-                    rmd_key = min(age, 95)
+                elif cur_age >= 75:
+                    rmd_key = min(cur_age, 95)
                     RMD_income[year] = balance / RMD_Factor[rmd_key]
+                    #print(RMD_income[year])
                     balance = balance * returns[year] - balance / RMD_Factor[rmd_key]
                     values[year] = balance
                 else:
@@ -126,16 +140,21 @@ class Account:
 
         else:
             for year in range(years):
-                balance = balance * returns[year] + self.annual_contribution
-                values[year] = balance
-                RMD_income[year] = 0
+                cur_age = self.owner.age + year
+                if cur_age <= self.owner.ret_age:
+                    balance = balance * returns[year] + self.annual_contribution
+                    values[year] = balance
+                    RMD_income[year] = 0
+                else:
+                    balance = balance * returns[year] 
+                    values[year] = balance
+                    RMD_income[year] = 0
 
-        year_col = np.arange(start_year, start_year + years, dtype=float).reshape(-1, 1)
-        self.balances   = np.hstack([year_col, values])
+        self.balances   = values
         self.rmd_income = RMD_income
 
-Madison=Person("Madison", "Stone", datetime.date(1986,3,9) , 61 ,62,3191,False,None,95000)
-Greg=Person("Greg", "Stone", datetime.date(1987,2,17), 62 , 62,4006,True,datetime.date(2018,3,1),160000)
+Madison=Person("Madison", "Stone", datetime.date(1986,3,9) , datetime.date(2049,3,10) ,62,3191,False,None,95000)
+Greg=Person("Greg", "Stone", datetime.date(1987,2,17), datetime.date(2049,2,18) , 62, 4006,True,datetime.date(2018,3,1),160000)
 persons = [Madison, Greg]
 DSH_Trust=Trust("David S Huy Trust",datetime.date(2025,6,10))
 
@@ -150,6 +169,25 @@ trust_Roth=Account("Trust Roth", DSH_Trust, 55000,0,"after-tax",True)
 accounts=mads_410k,greg_roth,greg_ira
 
 
+def build_pension_array(user):
+    pensionarray=np.zeros((num_years,num_runs))
+    today=datetime.date.today()
+    for year in range(num_years):
+        if today.year+year >= user.retirement_date.year:
+            pensionarray[year]=user.calcPension()
+        else:
+            pensionarray[year]=0
+    return pensionarray
+
+def build_ss_array(user):
+    ss_array=np.zeros((num_years,num_runs))
+    today=datetime.date.today()
+    for year in range(num_years):
+        if user.age+year >= user.ss_age:
+            ss_array[year]=user.calcSS()
+        else:
+            ss_array[year]=0
+    return ss_array
 
 # Lognormal drift adjusted for variance (Ito correction)
 drift = mean_return - 0.5 * market_volatility ** 2
@@ -194,215 +232,119 @@ RMD_Factor={
     95:8.9
 }
 
+gregPension=build_pension_array(Greg)
+gregSS=build_ss_array(Greg)
+madisonSS=build_ss_array(Madison)
 
-def plot_income(accounts, persons, start_year, num_years, selected_percentile=50):
-    years = np.arange(start_year, start_year + num_years)
-    income_components = {}
+mads_410k.simulate(returns,RMD_Factor,None)
+greg_ira.simulate(returns,RMD_Factor,None)
+greg_roth.simulate(returns,RMD_Factor,None)
 
-    for person in persons:
-        if person.has_pension:
-            annual_pension = person.calcPension()
-            retirement_year = person.dob.year + person.retirement_age
-            pension = np.zeros(num_years)
-            for i, yr in enumerate(range(start_year, start_year + num_years)):
-                if yr >= retirement_year:
-                    pension[i] = annual_pension
-            income_components[f"{person.fname} Pension"] = pension
+retirement_spend=np.full(num_years,120000/0.7)
+portfolio_withdrawal=np.zeros(num_years)
 
-    for person in persons:
-        ss = person.calcSS(start_year, num_years)
-        if ss.any():
-            income_components[f"{person.fname} SS"] = ss
+greg_roth_percentile=np.percentile(greg_roth.balances,selected_percentile,axis=1)
 
-    rmd_total = np.zeros(num_years)
-    for acct in accounts:
-        if acct.rmd_income is not None and (
-            acct.tax_treatment == "tax deferred" or
-            (isinstance(acct.owner, Trust) and acct.is_retirement)
-        ):
-            rmd_pct = np.percentile(acct.rmd_income, selected_percentile, axis=1)
-            if rmd_pct.shape[0] < num_years:
-                rmd_pct = np.concatenate([rmd_pct, np.zeros(num_years - rmd_pct.shape[0])])
-            rmd_total += rmd_pct
-    if rmd_total.any():
-        income_components[f"RMDs ({selected_percentile}th pct)"] = rmd_total
+for year in range(num_years):
+    if Greg.age+year>=Greg.ret_age:
+        total_fixed_income=np.percentile(gregPension,selected_percentile,axis=1)+ np.percentile(gregSS,selected_percentile,axis=1)+np.percentile(madisonSS,selected_percentile,axis=1)+np.percentile(mads_410k.rmd_income,selected_percentile,axis=1)+np.percentile(greg_ira.rmd_income,selected_percentile,axis=1)
+        portfolio_withdrawal[year]=max(0,retirement_spend[year]-total_fixed_income[year])
+        greg_roth_percentile[year]=greg_roth_percentile[year] - portfolio_withdrawal[year]
+    else:
+        portfolio_withdrawal[year]=0
+        greg_roth_percentile[year]=greg_roth_percentile[year]
 
-    colors = ["#2196F3", "#4CAF50", "#FF9800", "#F44336", "#9C27B0", "#00BCD4"]
-    fig, ax = plt.subplots(figsize=(12, 6))
-    bottom = np.zeros(num_years)
-    for (label, values), color in zip(income_components.items(), colors):
-        ax.bar(years, values, bottom=bottom, label=label, color=color, alpha=0.85, width=0.7)
-        bottom += values
 
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-    ax.set_xlim(start_year - 0.5, start_year + num_years - 0.5)
-    ax.set_xlabel("Year")
-    ax.set_ylabel("Annual Income")
-    ax.set_title("Retirement Income by Year")
-    ax.legend()
-    ax.grid(True, alpha=0.3, axis="y")
 
-    # Precompute per-year totals for tooltip
-    totals = sum(income_components.values())
 
-    tooltip = ax.annotate("", xy=(0, 0), xytext=(15, 15),
-                          textcoords="offset points",
-                          bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="gray", alpha=0.9),
-                          fontsize=9)
-    tooltip.set_visible(False)
+COLORS = ["#4C72B0", "#55A868", "#C44E52", "#8172B2", "#CCB974", "#64B5CD"]
 
-    def on_move(event):
-        if event.inaxes != ax or event.xdata is None:
-            tooltip.set_visible(False)
-            fig.canvas.draw_idle()
-            return
-        idx = int(round(event.xdata)) - start_year
-        idx = max(0, min(idx, num_years - 1))
-        year = years[idx]
-        lines = [f"{year}"]
-        for label, values in income_components.items():
-            if values[idx] > 0:
-                lines.append(f"{label}: ${values[idx]:,.0f}")
-        lines.append(f"Total: ${totals[idx]:,.0f}")
-        tooltip.set_text("\n".join(lines))
-        tooltip.xy = (event.xdata, event.ydata)
-        tooltip.set_visible(True)
+fig, ax = plt.subplots(figsize=(14, 7))
+fig.patch.set_facecolor("#F8F8F8")
+ax.set_facecolor("#F8F8F8")
+
+years = np.arange(datetime.date.today().year, datetime.date.today().year + num_years)
+
+p = lambda arr: np.percentile(arr, selected_percentile, axis=1)
+
+layers = [
+    (p(madisonSS),            "Madison SS"),
+    (p(gregSS),               "Greg SS"),
+    (p(gregPension),          "Greg Pension"),
+    (p(mads_410k.rmd_income), "Madison RMDs"),
+    (p(greg_ira.rmd_income),  "Greg RMDs"),
+    (portfolio_withdrawal,    "Portfolio Withdrawal"),
+]
+
+# Store bars and per-layer values for tooltip lookup
+bar_containers = []
+layer_values   = []
+bottom = np.zeros(num_years)
+for (values, label), color in zip(layers, COLORS):
+    bars = ax.bar(years, values, bottom=bottom, label=label,
+                  color=color, edgecolor="white", linewidth=0.4)
+    bar_containers.append(bars)
+    layer_values.append(values.copy())
+    bottom += values
+
+spend_line = ax.axhline(y=120000 / 0.7, linestyle=":", color="#E84040",
+                        linewidth=1.8, label="Retirement Spending Target")
+
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+ax.set_xlabel("Year", fontsize=11)
+ax.set_ylabel("Annual Income / Withdrawal ($)", fontsize=11)
+ax.set_title(f"Projected Income Stack — {selected_percentile}th Percentile", fontsize=13, fontweight="bold")
+ax.legend(loc="upper left", framealpha=0.85, fontsize=9)
+ax.grid(axis="y", color="white", linewidth=0.8)
+ax.spines[["top", "right"]].set_visible(False)
+
+# ── Hover tooltip ──────────────────────────────────────────────────────────
+cursor_vline = ax.axvline(color="gray", linewidth=0.8, linestyle="--", visible=False)
+tooltip = ax.annotate(
+    "", xy=(0, 0), xytext=(12, 12), textcoords="offset points",
+    bbox=dict(boxstyle="round,pad=0.5", fc="white", ec="#AAAAAA", alpha=0.95),
+    fontsize=9, family="monospace",
+)
+
+def on_move(event):
+    if event.inaxes != ax or event.xdata is None:
+        cursor_vline.set_visible(False)
+        tooltip.set_visible(False)
         fig.canvas.draw_idle()
+        return
 
-    fig.canvas.mpl_connect("motion_notify_event", on_move)
-    plt.tight_layout()
-    plt.show()
-
-
-def get_percentile(account_values, percentile):
-    return np.percentile(account_values[-1], percentile)
-
-def plot_percentiles(account_values, num_years, start_year=2026, selected_percentile=50):
-    years = np.arange(start_year, start_year + num_years)
-    p10  = np.percentile(account_values, 10,  axis=1)
-    p25  = np.percentile(account_values, 25,  axis=1)
-    p50  = np.percentile(account_values, 50,  axis=1)
-    p75  = np.percentile(account_values, 75,  axis=1)
-    p90  = np.percentile(account_values, 90,  axis=1)
-    psel = np.percentile(account_values, selected_percentile, axis=1)
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-
-    ax.fill_between(years, p10, p90, alpha=0.2, color="steelblue", label="10th–90th")
-    ax.fill_between(years, p25, p75, alpha=0.35, color="steelblue", label="25th–75th")
-    ax.plot(years, p50,  color="steelblue", linewidth=2, label="Median (50th)")
-    ax.plot(years, psel, color="red",       linewidth=2, linestyle="--",
-            label=f"{selected_percentile}th percentile")
-
-    ax.set_xlim(start_year, start_year + num_years - 1)
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-    ax.set_xlabel("Year")
-    ax.set_ylabel("Portfolio Balance")
-    ax.set_title("Monte Carlo Portfolio Simulation")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    # Interactive crosshair + tooltip
-    cursor_vline = ax.axvline(color="gray", linewidth=0.8, linestyle="--", visible=False)
-    tooltip = ax.annotate("", xy=(0, 0), xytext=(15, 15),
-                          textcoords="offset points",
-                          bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="gray", alpha=0.9),
-                          fontsize=9)
-
-    def on_move(event):
-        if event.inaxes != ax or event.xdata is None:
-            cursor_vline.set_visible(False)
-            tooltip.set_visible(False)
-            fig.canvas.draw_idle()
-            return
-        idx = int(round(event.xdata)) - start_year
-        idx = max(0, min(idx, num_years - 1))
-        year = years[idx]
-        cursor_vline.set_xdata([year])
-        cursor_vline.set_visible(True)
-        lines = {
-            f"90th": p90[idx], f"75th": p75[idx], f"50th": p50[idx],
-            f"25th": p25[idx], f"10th": p10[idx],
-            f"{selected_percentile}th": psel[idx],
-        }
-        text = f"{year}\n" + "\n".join(f"{k}: ${v:,.0f}" for k, v in lines.items())
-        tooltip.set_text(text)
-        tooltip.xy = (year, event.ydata)
-        tooltip.set_visible(True)
+    yr = int(round(event.xdata))
+    idx = yr - years[0]
+    if idx < 0 or idx >= num_years:
+        cursor_vline.set_visible(False)
+        tooltip.set_visible(False)
         fig.canvas.draw_idle()
+        return
 
-    fig.canvas.mpl_connect("motion_notify_event", on_move)
-    plt.tight_layout()
-    plt.show()
+    cursor_vline.set_xdata([yr])
+    cursor_vline.set_visible(True)
 
-def plot_account_values(accounts, num_years, start_year=2026, selected_percentile=50):
-    years = np.arange(start_year, start_year + num_years)
-    colors = ["#2196F3", "#4CAF50", "#FF9800", "#F44336", "#9C27B0", "#00BCD4"]
+    lines = [f"  {yr}"]
+    total = 0.0
+    for (_, label), vals in zip(layers, layer_values):
+        v = vals[idx]
+        if v > 0:
+            lines.append(f"  {label:<22} ${v:>10,.0f}")
+            total += v
+    lines.append(f"  {'─'*34}")
+    lines.append(f"  {'Total':<22} ${total:>10,.0f}")
 
-    account_lines = {}
-    for acct in accounts:
-        bal = acct.balances[:, 1:]
-        if bal.shape[0] < num_years:
-            bal = np.vstack([bal, np.zeros((num_years - bal.shape[0], bal.shape[1]))])
-        account_lines[acct.name] = np.percentile(bal, selected_percentile, axis=1)
+    tooltip.set_text("\n".join(lines))
+    tooltip.xy = (yr, event.ydata)
+    # Flip tooltip to left side when near right edge
+    x_frac = (yr - years[0]) / num_years
+    tooltip.set_position((-160, 12) if x_frac > 0.75 else (12, 12))
+    tooltip.set_visible(True)
+    fig.canvas.draw_idle()
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    for (name, values), color in zip(account_lines.items(), colors):
-        ax.plot(years, values, label=name, color=color, linewidth=2)
-
-    ax.set_xlim(start_year, start_year + num_years - 1)
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-    ax.set_xlabel("Year")
-    ax.set_ylabel("Account Balance")
-    ax.set_title(f"Account Values Over Time ({selected_percentile}th Percentile)")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    cursor_vline = ax.axvline(color="gray", linewidth=0.8, linestyle="--", visible=False)
-    tooltip = ax.annotate("", xy=(0, 0), xytext=(15, 15),
-                          textcoords="offset points",
-                          bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="gray", alpha=0.9),
-                          fontsize=9)
-    tooltip.set_visible(False)
-
-    def on_move(event):
-        if event.inaxes != ax or event.xdata is None:
-            cursor_vline.set_visible(False)
-            tooltip.set_visible(False)
-            fig.canvas.draw_idle()
-            return
-        idx = int(round(event.xdata)) - start_year
-        idx = max(0, min(idx, num_years - 1))
-        year = years[idx]
-        cursor_vline.set_xdata([year])
-        cursor_vline.set_visible(True)
-        total = sum(v[idx] for v in account_lines.values())
-        lines = [f"{year}"]
-        for name, values in account_lines.items():
-            if values[idx] > 0:
-                lines.append(f"{name}: ${values[idx]:,.0f}")
-        lines.append(f"Total: ${total:,.0f}")
-        tooltip.set_text("\n".join(lines))
-        tooltip.xy = (year, event.ydata)
-        tooltip.set_visible(True)
-        fig.canvas.draw_idle()
-
-    fig.canvas.mpl_connect("motion_notify_event", on_move)
-    plt.tight_layout()
-    plt.show()
+fig.canvas.mpl_connect("motion_notify_event", on_move)
+plt.tight_layout()
+plt.show()
 
 
-account_values = 0
-for acct in accounts:
-    acct.simulate(returns, RMD_Factor, start_year=2026)
-    bal = acct.balances[:, 1:]  # col 0 is calendar year
-    if bal.shape[0] < num_years:
-        bal = np.vstack([bal, np.zeros((num_years - bal.shape[0], bal.shape[1]))])
-    account_values += bal
-
-plot_percentiles(account_values, num_years, start_year=2026, selected_percentile=33)
-plot_account_values(accounts, num_years, start_year=2026, selected_percentile=33)
-plot_income(accounts, persons, start_year=2026, num_years=num_years, selected_percentile=33)
